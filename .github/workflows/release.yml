@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CLIENT_REPO: https://gitlab.com/darkanrs/darkan-bot
+  CLIENT_REF: 92c0c88d35ba06ada950e9b1be64fdc72e686af8
+  SERVER_HOST: rsps.starforge.io
+  SERVER_PORT: '43594'
+
+jobs:
+  package:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            asset: RSPS-Windows.zip
+          - os: macos-latest
+            asset: RSPS-macOS.zip
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Fetch the client
+        run: |
+          git init -q client
+          git -C client remote add origin "$CLIENT_REPO.git"
+          git -C client fetch -q --depth 1 origin "$CLIENT_REF"
+          git -C client checkout -q FETCH_HEAD
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build the client
+        working-directory: client
+        run: ./gradlew shadowJar --console=plain
+
+      - name: Package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          [[ "$GITHUB_REF_TYPE" == tag && "$version" =~ ^[1-9][0-9]*(\.[0-9]+){0,2}$ ]] || version=1.0.0
+          mkdir input dist
+          cp client/build/libs/darkan-client-shaded-*-all.jar input/darkan-client.jar
+          args=(
+            --type app-image --name RSPS --app-version "$version"
+            --input input --main-jar darkan-client.jar --main-class com.darkan.bot.BotKt
+            --java-options -XX:+UseZGC --java-options -Xmx4g --java-options -Xms1g
+            --java-options --add-opens=java.desktop/java.awt=ALL-UNNAMED
+            --arguments "$SERVER_HOST" --arguments "$SERVER_PORT"
+            --dest dist
+          )
+          [[ "$RUNNER_OS" == macOS ]] && args+=(--mac-package-identifier io.starforge.rsps)
+          jpackage "${args[@]}"
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            mkdir bundle && mv dist/RSPS.app bundle/ && cp LICENSE bundle/LICENSE.txt
+            ditto -c -k --keepParent bundle "${{ matrix.asset }}"
+          else
+            cp LICENSE dist/RSPS/LICENSE.txt
+            (cd dist && 7z a -bso0 "../${{ matrix.asset }}" RSPS)
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    needs: package
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<NOTES
+          Cliente para **$SERVER_HOST**, porta $SERVER_PORT.
+
+          Feito a partir do [darkan-bot ${CLIENT_REF:0:8}]($CLIENT_REPO/-/tree/$CLIENT_REF), sob a GNU AGPL 3.0.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" assets/* --repo "$GITHUB_REPOSITORY" --title "RSPS $GITHUB_REF_NAME" --notes-file notes.md
