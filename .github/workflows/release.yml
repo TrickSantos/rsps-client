@@ -63,8 +63,8 @@ jobs:
           [[ "$RUNNER_OS" == macOS ]] && args+=(--mac-package-identifier io.starforge.rsps)
           jpackage "${args[@]}"
           if [[ "$RUNNER_OS" == macOS ]]; then
-            mkdir bundle && mv dist/RSPS.app bundle/ && cp LICENSE bundle/LICENSE.txt
-            ditto -c -k --keepParent bundle "${{ matrix.asset }}"
+            mkdir -p bundle/RSPS && mv dist/RSPS.app bundle/RSPS/ && cp LICENSE bundle/RSPS/LICENSE.txt
+            ditto -c -k --keepParent bundle/RSPS "${{ matrix.asset }}"
           else
             cp LICENSE dist/RSPS/LICENSE.txt
             (cd dist && 7z a -bso0 "../${{ matrix.asset }}" RSPS)
